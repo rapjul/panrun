@@ -1,0 +1,23 @@
+name: test
+
+on:
+  push:
+    branches: [ 'master', 'additions', 'feat/from-yaml', '**' ]
+  pull_request:
+    branches: [ 'master' ]
+
+jobs:
+  ruby:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+      - name: Install dependencies
+        run: |
+          gem install minitest
+      - name: Run tests
+        run: |
+          ruby -Itest test/test_from_handling.rb

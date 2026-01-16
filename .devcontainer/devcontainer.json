@@ -10,7 +10,8 @@
 	"customizations": {
 		"vscode": {
 			"extensions": [
-				"Shopify.ruby-lsp"
+				"Shopify.ruby-lsp",
+				"DavidAnson.vscode-markdownlint"
 			]
 		}
 	}
