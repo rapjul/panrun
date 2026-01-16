@@ -1,21 +1,23 @@
 #!/usr/bin/env ruby
 require 'yaml'
 
-# guess output_format from ARGV
-def get_output_format()
+# guess output_format from argv
+def get_output_format(argv = ARGV)
   output_file = nil
-  ARGV.each_with_index do |a, i|
+  (argv || []).each_with_index do |a, i|
+    next if a.nil?
     if a == "-o" || a == "--output"
-      output_file = ARGV[i+1]
-    elsif a.start_with? "--output="
+      output_file = argv[i+1]
+    elsif a.start_with?("--output=")
       output_file = a[9..-1]
     end
   end
   output_format = nil
-  ARGV.each_with_index do |a, i|
+  (argv || []).each_with_index do |a, i|
+    next if a.nil?
     if a == "-t" || a == "--to"
-      output_format = ARGV[i+1]
-    elsif a.start_with? "--to="
+      output_format = argv[i+1]
+    elsif a.start_with?("--to=")
       output_format = a[5..-1]
     end
   end
@@ -27,7 +29,62 @@ def get_output_format()
       end
     end
   end
-  return output_format
+  output_format
+end
+
+# parse argv to find: leading options, input file, and post-file args
+# This respects options that take values (e.g. -t epub or --to=epub)
+def parse_argv_for_input(argv)
+  argv ||= []
+  leading = []
+  input_file = nil
+  post = []
+  i = 0
+  while i < argv.length
+    a = argv[i]
+    break if a.nil?
+    # explicit end-of-options
+    if a == "--"
+      i += 1
+      if i < argv.length
+        input_file = argv[i]
+        post = argv[(i+1)..-1] || []
+      end
+      break
+    end
+
+    # if we already found input_file, remaining tokens are post
+    if input_file
+      post << a
+      i += 1
+      next
+    end
+
+    if a.start_with?("-")
+      # options that take a separate value
+      if ["-t","--to","-o","--output"].include?(a)
+        leading << a
+        if i+1 < argv.length
+          leading << argv[i+1]
+        end
+        i += 2
+      elsif a.include?("=")
+        leading << a
+        i += 1
+      else
+        # flag without value
+        leading << a
+        i += 1
+      end
+    else
+      input_file = a
+      i += 1
+      post = argv[i..-1] || []
+      break
+    end
+  end
+
+  [leading, input_file, post]
 end
 
 def get_pandoc_opts()
@@ -156,25 +213,42 @@ def apply_global_from(meta, top_from)
 end
 
 
-def build_pandoc_args(input_file, argv_array)
-  old_argv = ARGV.dup
-  ARGV.replace(argv_array)
+def build_pandoc_args(*args)
+  # two calling conventions:
+  #  - build_pandoc_args(argv_array)
+  #  - build_pandoc_args(input_file, argv_array)
+  if args.length == 1 && args[0].is_a?(Array)
+    argv_array = args[0]
+    leading_opts, input_file, post_file_args = parse_argv_for_input(argv_array)
+  elsif args.length >= 2
+    input_file = args[0]
+    argv_array = args[1].is_a?(Array) ? args[1] : ARGV
+    # find input_file index in argv_array
+    idx = argv_array.index(input_file)
+    if idx
+      leading_opts = argv_array[0...idx]
+      post_file_args = argv_array[(idx+1)..-1] || []
+    else
+      # fallback: no index found, try parsing normally
+      leading_opts, input_file, post_file_args = parse_argv_for_input(argv_array)
+    end
+  else
+    raise ArgumentError, "Invalid arguments for build_pandoc_args"
+  end
 
   yaml = load_yaml(input_file) || {}
   doc_meta = yaml[output_key_name] || {}
   meta, file_arg, file_top = get_meta_from_other_file doc_meta, yaml["type"]
-  # apply top-level `from` precedence: per-format `from` stays if present, else local top-level `from`, else default file `from`
+  # apply top-level `from` precedence
   top_from = yaml["from"] || (file_top && file_top["from"])
   apply_global_from(meta, top_from) if top_from
 
-  # determine output format
-  output_format = get_output_format()
+  # determine output format from provided argv_array
+  output_format = get_output_format(argv_array)
   if output_format.nil?
     if meta.is_a?(Hash) && meta.first
-      # fallback to the first output key (hashes are ordered in ruby)
       output_format = meta.first[0]
     else
-      ARGV.replace(old_argv)
       raise "Could not find any output format in YAML."
     end
   end
@@ -189,27 +263,23 @@ def build_pandoc_args(input_file, argv_array)
              elsif meta[output_format + "_presentation"]
                meta[output_format + "_presentation"]
              else
-               ARGV.replace(old_argv)
                raise "Could not find YAML key for detected output format '#{output_format}'."
              end
 
-  args = get_args(meta_out)
-  final_args = ["pandoc", input_file] + args + file_arg + ARGV[1..-1]
-
-  ARGV.replace(old_argv)
+  meta_args = get_args(meta_out)
+  final_args = ["pandoc"] + (leading_opts || []) + [input_file] + meta_args + (file_arg || []) + (post_file_args || [])
   final_args
 end
 
 if __FILE__ == $0
-  # determine input file
-  input_file = ARGV[0]
+  leading_opts, input_file, post_file_args = parse_argv_for_input(ARGV)
   if input_file.nil? || input_file[0] == "-"
     abort "Usage: panrun input.md [pandoc-options]\n\n"\
           "Looking for default.yaml etc. in #{data_dir_name}\n"\
           "For more info, see https://github.com/mb21/panrun"
   end
 
-  args = build_pandoc_args(input_file, ARGV)
+  args = build_pandoc_args(ARGV)
 
   STDERR.puts "panrun calling: " + args.join(' ')
 
