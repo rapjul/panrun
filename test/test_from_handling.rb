@@ -1,5 +1,5 @@
 require 'minitest/autorun'
-require File.expand_path('../panrun', __dir__)
+load File.expand_path('../panrun', __dir__) # use load to import script without .rb extension
 
 # ensure get_args recognizes --from in tests
 def get_pandoc_opts()
@@ -56,5 +56,62 @@ class TestFromHandling < Minitest::Test
     assert_includes args, 'markdown+special'
   ensure
     tf.unlink if tf
+  end
+
+  def test_option_before_file_places_before_filename
+    require 'tempfile'
+    tf = Tempfile.new(['test_doc4', '.md'])
+    tf.write("---\nfrom: markdown+special\noutput:\n  html:\n    standalone: true\n---\n# content\n")
+    tf.close
+
+    args = build_pandoc_args(['-t', 'html', tf.path])
+    assert_equal 'pandoc', args[0]
+    assert_includes args, '-t'
+    assert args.index('-t') < args.index(tf.path)
+  ensure
+    tf.unlink if tf
+  end
+
+  def test_option_after_file_stays_after_filename
+    require 'tempfile'
+    tf = Tempfile.new(['test_doc5', '.md'])
+    tf.write("---\nfrom: markdown+special\noutput:\n  html:\n    standalone: true\n---\n# content\n")
+    tf.close
+
+    args = build_pandoc_args([tf.path, '-t', 'html'])
+    assert_equal 'pandoc', args[0]
+    assert_includes args, '-t'
+    assert args.index('-t') > args.index(tf.path)
+  ensure
+    tf.unlink if tf
+  end
+
+  def test_build_pandoc_args_per_output_override
+    require 'tempfile'
+    tf = Tempfile.new(['test_doc2', '.md'])
+    tf.write("---\nfrom: markdown+global\noutput:\n  html:\n    from: markdown+override\n---\n# content\n")
+    tf.close
+
+    args = build_pandoc_args(tf.path, [tf.path, '-t', 'html'])
+    assert_includes args, 'markdown+override'
+  ensure
+    tf.unlink if tf
+  end
+
+  def test_build_pandoc_args_uses_default_file_from
+    require 'tempfile'
+    tf_default = Tempfile.new(['defaults', '.yaml'])
+    tf_default.write("---\nfrom: markdown+default\noutput:\n  html:\n    standalone: true\n")
+    tf_default.close
+
+    tf = Tempfile.new(['test_doc3', '.md'])
+    tf.write("---\ntype: #{tf_default.path}\noutput:\n  html:\n    standalone: true\n---\n# content\n")
+    tf.close
+
+    args = build_pandoc_args(tf.path, [tf.path, '-t', 'html'])
+    assert_includes args, 'markdown+default'
+  ensure
+    tf.unlink if tf
+    tf_default.unlink if tf_default
   end
 end
