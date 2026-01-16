@@ -63,6 +63,20 @@ If you put some YAML in `~/.panrun/default.yaml` (see `panrun -h` for the Window
 
 Finally, you can e.g. put `type: letter` in the YAML of your input document. In that case, panrun will look for `~/.panrun/letter.yaml` instead of `default.yaml`.
 
+### Specifying the input format (`from`)
+
+You can specify the pandoc input format using a top-level `from:` key (applies as a default for all outputs) or a per-output `from:` that overrides the top-level value. This is useful when you want more than plain `markdown`, e.g. to enable extensions:
+
+```yaml
+from: markdown+hard_line_breaks+lists_without_preceding_blankline-blank_before_blockquote-blank_before_header
+output:
+  epub:
+    from: markdown+hard_line_breaks+lists_without_preceding_blankline-blank_before_blockquote-blank_before_header
+    standalone: true
+```
+
+The `from` value is passed through to pandoc as `--from <value>`.
+
 
 ## Design
 
