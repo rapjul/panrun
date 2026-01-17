@@ -2,5 +2,12 @@
     "cSpell.words": [
         "pandoc",
         "panrun"
-    ]
+    ],
+    "chat.tools.terminal.autoApprove": {
+        "rubocop": true,
+        "/^ruby -Itest test\/.*\\.rb$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
 }

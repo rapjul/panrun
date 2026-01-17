@@ -1,0 +1,51 @@
+# RuboCop Configuration File
+# See https://docs.rubocop.org/rubocop/configuration.html for details
+
+# AllCops:
+#   TargetRubyVersion: 3.0
+#   NewCops: enable
+
+# Layout cops
+Layout/LineLength:
+  Max: 150
+
+Layout/EmptyLineAfterMagicComment:
+  Enabled: true
+
+Layout/SpaceInsideHashLiteralBraces:
+  Enabled: true
+
+
+# Lint cops
+Lint/NestedMethodDefinition:
+  Enabled: false
+
+Lint/UselessAssignment:
+  Enabled: true
+
+
+# Style cops
+Style/SafeNavigation:
+  Enabled: true
+
+
+
+# Loosen some metrics thresholds for this small script to reduce noise
+Metrics/MethodLength:
+  Enabled: false
+
+Metrics/BlockLength:
+  Enabled: false
+
+Metrics/AbcSize:
+  Max: 120
+
+Metrics/CyclomaticComplexity:
+  Max: 20
+
+Metrics/PerceivedComplexity:
+  Max: 20
+
+# Allow accessor method names like get_* in this codebase (tests use short stubs)
+Naming/AccessorMethodName:
+  Enabled: false
