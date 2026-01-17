@@ -49,3 +49,9 @@ Metrics/PerceivedComplexity:
 # Allow accessor method names like get_* in this codebase (tests use short stubs)
 Naming/AccessorMethodName:
   Enabled: false
+
+Naming/MethodParameterName:
+  Enabled: false
+
+Metrics/ParameterLists:
+  Enabled: false

@@ -5,6 +5,23 @@ require 'English'
 
 require 'yaml'
 
+# flags handled internally by panrun (do not forward these to pandoc)
+INTERNAL_FLAGS = %w[
+  -n --dry-run
+  -q --quiet
+  -l --log
+  -f --force
+  -v --verbose
+  -h --help
+  -u --unique
+  -a --all
+  -t --to
+  -o --output
+].freeze
+
+# flags that take a separate value (when not passed as --flag=value)
+INTERNAL_FLAGS_WITH_VALUE = %w[-l --log -o --output -t --to].freeze
+
 # guess output_format from argv
 def get_output_format(argv = ARGV)
   output_file = nil
@@ -140,22 +157,25 @@ def parse_cli_flags(argv)
     dry_run: false,
     verbose: false,
     quiet: false,
-    log: nil
+    log: nil,
+    all: false
   }
   (argv || []).each_with_index do |a, i|
     case a
     when '--force', '-f'
       flags[:force] = true
-    when '--dry-run'
+    when '--dry-run', '-n'
       flags[:dry_run] = true
     when '--verbose', '-v'
       flags[:verbose] = true
-    when '--quiet'
+    when '--quiet', '-q'
       flags[:quiet] = true
-    when '--log'
+    when '--log', '-l'
       flags[:log] = argv[i + 1]
-    when /^--log=(.*)/
+    when /^--log=(.*)/, /^-l=(.*)/
       flags[:log] = Regexp.last_match(1)
+    when '--all', '-a'
+      flags[:all] = true
     end
   end
   flags
@@ -199,7 +219,15 @@ end
 def get_args(meta)
   pandoc_opts = get_pandoc_opts
   args = []
+
+  # normalize legacy `t` key to `to` if present
+  meta = meta.dup
+  meta['to'] = meta.delete('t') if meta.key?('t') && !meta.key?('to')
+
   meta.each do |key, val|
+    # do not convert YAML `to`/`t`/`output` keys into pandoc arguments
+    next if %w[t to output].include?(key.to_s)
+
     # check whether `key` is an option that can be
     # used with the installed pandoc version
     if pandoc_opts.include? key
@@ -270,6 +298,8 @@ def load_yaml(file_name)
 rescue ArgumentError
   # fallback to ruby v2 arguments
   YAML.load_file(file_name)
+rescue Psych::SyntaxError => e
+  abort "panrun: Error parsing YAML header in '#{file_name}':\n#{e.message}"
 end
 
 # try to load default YAML from other files and merge it with local YAML
@@ -316,17 +346,24 @@ def resolve_target_format(target, meta, supported_formats)
   # if target corresponds to a YAML output key
   if meta && meta[target]
     mo = meta[target]
-    pandoc_fmt = mo['to'] || mo['output']
-    if pandoc_fmt.nil? || pandoc_fmt.to_s.empty?
-      # check whether the key itself is a pandoc format (stripping +/-, etc.)
-      base = normalize_format(target)
-      unless supported_formats.include?(base) || supported_formats.include?(target)
-        raise "panrun: target '#{target}' is not a known pandoc format and no `to` field is present in YAML output '#{target}'."
+    # prefer explicit `to` in YAML; do not treat `output` (a filename) as a format
+    pandoc_fmt = mo['to']
+    if pandoc_fmt && !pandoc_fmt.to_s.empty?
+      base = normalize_format(pandoc_fmt)
+      unless supported_formats.include?(base) || supported_formats.include?(pandoc_fmt)
+        raise "panrun: YAML `to` value '#{pandoc_fmt}' for output '#{target}' is not a known pandoc format."
       end
 
-      pandoc_fmt = target
-
+      return [pandoc_fmt, mo]
     end
+
+    # if no explicit `to`/`output` provided, check whether the key is a pandoc format
+    base = normalize_format(target)
+    unless supported_formats.include?(base) || supported_formats.include?(target)
+      raise "panrun: target '#{target}' is not a known pandoc format and no `to` field is present in YAML output '#{target}'."
+    end
+
+    pandoc_fmt = target
     return [pandoc_fmt, mo]
   end
 
@@ -368,7 +405,7 @@ def slugify(title)
 end
 
 # generate an output filename based on YAML, title, heading, and options
-def generate_output_filename(input_file, yaml, meta_out, pandoc_fmt, add_date = false, **kwargs)
+def generate_output_filename(input_file, yaml, meta_out, pandoc_fmt, add_date: false, **kwargs)
   # support both legacy positional boolean and keyword usage (add_date: true)
   add_date = kwargs[:add_date] if kwargs.key?(:add_date)
 
@@ -406,30 +443,47 @@ def remove_to_options!(arr)
   arr
 end
 
-def replace_to_options(arr, new_format)
+# Remove any internal panrun flags from an argument list.
+# This respects `--` semantics by only operating on the provided array
+# (callers should only pass the portion before `--`).
+def strip_internal_flags(arr)
+  return [] unless arr.is_a?(Array)
+
+  res = []
   i = 0
   while i < arr.length
     a = arr[i]
-    if %w[-t --to].include?(a)
-      # replace the value after -t/--to if it exists
-      if i + 1 < arr.length
-        arr[i + 1] = new_format
-        i += 2
-      else
-        i += 1
-      end
-    elsif a.start_with?('--to=')
-      arr[i] = "--to=#{new_format}"
-      i += 1
-    else
-      i += 1
+    if a == '--'
+      # caller should not pass `--` here; but be robust and keep rest
+      res.concat arr[(i + 1)..] || []
+      break
     end
+
+    # remove flags passed as --flag=value that match internal flags
+    if a.start_with?('--') && a.include?('=')
+      key = a.split('=', 2)[0]
+      i += 1 and next if INTERNAL_FLAGS.include?(key)
+    end
+
+    if INTERNAL_FLAGS.include?(a)
+      # drop flag and any separate value for flags that take values
+      i += if INTERNAL_FLAGS_WITH_VALUE.include?(a)
+             2
+           else
+             1
+           end
+      next
+    end
+
+    # otherwise keep
+    res << a
+    i += 1
   end
-  arr
+  res
 end
 
 def prepare_per_leading(leading_opts, pandoc_fmt)
-  arr = (leading_opts || []).dup
+  arr = strip_internal_flags((leading_opts || []).dup)
   remove_to_options!(arr)
   arr + ['-t', pandoc_fmt]
 end
@@ -444,6 +498,14 @@ def determine_output_file(input_file, yaml, mo, pandoc_fmt, flags)
           generate_output_filename(input_file, yaml, mo || {}, pandoc_fmt, add_date: add_date)
         end
 
+  # surface diagnostics about how the output filename was chosen
+  if out && !(flags && flags[:quiet])
+    if mo && mo['output'] && !mo['output'].to_s.empty?
+      warn "panrun: using output filename from YAML for format #{pandoc_fmt}: #{out}"
+    elsif auto_filename_enabled
+      warn "panrun: auto-generated output filename for format #{pandoc_fmt}: #{out} (from title or first heading)"
+    end
+  end
   if out
     overwrite = (mo && mo['overwrite']) || yaml['overwrite'] || flags[:force]
     raise "panrun: output file '#{out}' already exists; set overwrite: true in YAML or pass --force to overwrite" if File.exist?(out) && !overwrite
@@ -453,10 +515,30 @@ def determine_output_file(input_file, yaml, mo, pandoc_fmt, flags)
 end
 
 def build_pandoc_cmd(per_leading, input_file, mo, file_arg, output_file, post_file_args)
-  base = ['pandoc'] + per_leading + [input_file] + (mo ? get_args(mo) : []) + file_arg + (post_file_args || [])
+  # process post-file args: strip internal flags from the portion before `--`
+  processed_post = process_post_file_args(post_file_args || [])
+
+  base = ['pandoc'] + per_leading + [input_file] + (mo ? get_args(mo) : []) + file_arg + processed_post
   return base + ['--output', output_file] if output_file
 
   base
+end
+
+# Process post-file arguments: remove internal flags from the portion
+# before a `--`, but forward arguments after `--` unchanged.
+def process_post_file_args(arr)
+  return [] unless arr.is_a?(Array)
+
+  # find first `--` if present
+  idx = arr.index('--')
+  if idx.nil?
+    strip_internal_flags(arr)
+  else
+    pre = arr[0...idx]
+    post = arr[(idx + 1)..] || []
+    # keep the `--` separator when forwarding to pandoc
+    strip_internal_flags(pre) + ['--'] + post
+  end
 end
 
 # Build pandoc invocations for one or more targets
@@ -474,21 +556,48 @@ def build_pandoc_invocations(argv_array)
 
   # determine targets: CLI -t values, else YAML outputs list, else single default
   cli_targets = get_cli_targets(argv_array)
+
+  # treat --all/-a as equivalent to -t all
+  cli_targets = ['all'] if flags[:all]
+
+  # Expand "all" to the YAML-defined outputs (if present), the meta keys,
+  # or fall back to the list of supported pandoc formats.
   targets = if cli_targets && !cli_targets.empty?
-              cli_targets
+              if cli_targets.map(&:to_s).include?('all')
+                if yaml['outputs'].is_a?(Array)
+                  outputs = yaml['outputs'].map(&:to_s)
+                  if outputs.include?('all')
+                    if meta.is_a?(Hash) && !meta.empty?
+                      meta.keys.map(&:to_s)
+                    else
+                      formats.dup
+                    end
+                  else
+                    outputs
+                  end
+                elsif meta.is_a?(Hash) && !meta.empty?
+                  meta.keys.map(&:to_s)
+                else
+                  formats.dup
+                end
+              else
+                cli_targets.map(&:to_s)
+              end
             elsif yaml['outputs'].is_a?(Array)
-              yaml['outputs']
+              yaml['outputs'].map(&:to_s)
             else
               # fallback to previous single-target behavior
               ofmt = get_output_format(argv_array)
               if ofmt
-                [ofmt]
+                [ofmt.to_s]
               elsif meta.is_a?(Hash) && meta.first
-                [meta.first[0]]
+                [meta.first[0].to_s]
               else
                 raise 'Could not find any output format from CLI or YAML.'
               end
             end
+
+  targets = targets.map(&:to_s).uniq
 
   commands = []
   targets.each do |t|
@@ -499,7 +608,7 @@ def build_pandoc_invocations(argv_array)
     warn "panrun: [WARNING] unknown pandoc options for '#{t}': #{unknown.join(', ')}" if unknown && !unknown.empty?
 
     # check if -t/--to appears in post_file_args (after filename)
-    has_post_to = post_file_args && post_file_args.any? { |a| a == '-t' || a == '--to' || a.start_with?('--to=') }
+    has_post_to = post_file_args&.any? { |a| a == '-t' || a == '--to' || a.start_with?('--to=') }
 
     if has_post_to
       # -t was after filename, so prepare leading without -t, and keep -t in post
@@ -545,14 +654,30 @@ end
 if __FILE__ == $PROGRAM_NAME
   # show help if requested or no args
   if ARGV.empty? || ARGV.include?('--help') || ARGV.include?('-h')
-    puts 'Usage: panrun [options] input.md [pandoc-options]'
-    puts 'Options: --force, --dry-run, --verbose, --quiet, --log <file>, --help'
+    puts <<~HELP
+      Usage: panrun [options] input.md [pandoc-options]
+
+      Options:
+        -t, --to FORMAT    Specify output (pandoc) format. Can be repeated.
+        -o, --output FILE  Specify explicit output filename.
+        -f, --force        Overwrite existing output files.
+        -n, --dry-run      Print the pandoc commands without running them.
+        -a, --all          Convert to all formats defined in YAML or supported by pandoc.
+        -v, --verbose      Run pandoc showing output.
+        -q, --quiet        Suppress panrun messages.
+        -l, --log FILE     Append panrun calls to FILE.
+        -h, --help         Show this help message.
+    HELP
     exit 0
   end
 
   # basic validation: ensure input file is present
-  _, input_file, = parse_argv_for_input(ARGV)
+  leading, input_file, = parse_argv_for_input(ARGV)
   if input_file.nil? || input_file[0] == '-'
+    if !leading.empty? && leading.last&.to_s&.include?('.')
+      warn 'Error: No input file found. Did you consume the filename as an option value?'
+      warn "The last argument parsed was: '#{leading.last}'"
+    end
     abort "Usage: panrun input.md [pandoc-options]\n\n"\
           "Looking for default.yaml etc. in #{data_dir_name}\n"\
           'For more info, see https://github.com/mb21/panrun'

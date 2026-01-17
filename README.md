@@ -27,6 +27,12 @@ output:
         template: letter.tex
         metadata:
             fontsize: 12pt
+    epub:
+        to: epub
+        output: "My Document.epub"
+        standalone: true
+        epub-title-page: true
+        top-level-division: chapter
 ---
 
 # My Header
@@ -69,6 +75,15 @@ panrun 01.md 02.md 03.md -o output.pdf
 Thus `panrun *.md` will work, as long as the YAML is found in the alphabetically first file.
 
 The input-file doesn't even have to be a markdown file. As long as it starts with a YAML block, it should work.
+
+
+### How auto-generated output filenames are derived
+
+When `auto-filename: true` is set in your document (or per-output `auto-filename`), panrun generates an output filename from the document `title` (if present) or the first top-level `# Heading` found in the file. Panrun slugifies the title by lowercasing, replacing non-alphanumeric characters with dashes, and trimming leading/trailing dashes. The generated filename uses the target format's usual extension (e.g. `epub` → `.epub`).
+
+Example: a document with `title: "My Document"` converted to `epub` will produce `my-document.epub`.
+
+At runtime panrun will print a short diagnostic telling you which output filename is being used and whether it was taken from the YAML or auto-generated. Use `-q` to suppress these messages and `-v` to see full pandoc output.
 
 
 ### Defaults and document types
