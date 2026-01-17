@@ -406,6 +406,24 @@ def remove_to_options!(arr)
   arr
 end
 
+def replace_to_options(arr, new_format)
+  i = 0
+  while i < arr.length
+    a = arr[i]
+    if %w[-t --to].include?(a)
+      # replace the value after -t/--to
+      arr[i + 1] = new_format if i + 1 < arr.length
+      i += 2
+    elsif a.start_with?('--to=')
+      arr[i] = "--to=#{new_format}"
+      i += 1
+    else
+      i += 1
+    end
+  end
+  arr
+end
+
 def prepare_per_leading(leading_opts, pandoc_fmt)
   arr = (leading_opts || []).dup
   remove_to_options!(arr)
@@ -476,16 +494,47 @@ def build_pandoc_invocations(argv_array)
     unknown = validate_meta_options(mo || {})
     warn "panrun: [WARNING] unknown pandoc options for '#{t}': #{unknown.join(', ')}" if unknown && !unknown.empty?
 
-    per_leading = prepare_per_leading(leading_opts, pandoc_fmt)
+    # check if -t/--to appears in post_file_args (after filename)
+    has_post_to = post_file_args && post_file_args.any? { |a| a == '-t' || a == '--to' || a.start_with?('--to=') }
+
+    if has_post_to
+      # -t was after filename, so prepare leading without -t, and keep -t in post
+      per_leading = (leading_opts || []).dup
+      remove_to_options!(per_leading)
+      # replace -t values in post_file_args with our target format
+      clean_post_args = replace_to_options(post_file_args.dup, pandoc_fmt)
+    else
+      # -t was before filename (or not present), so add it to per_leading
+      per_leading = prepare_per_leading(leading_opts, pandoc_fmt)
+      # remove -t/--to from post_file_args since they're handled in per_leading
+      clean_post_args = post_file_args ? remove_to_options!(post_file_args.dup) : []
+    end
 
     output_file = determine_output_file(input_file, yaml, mo, pandoc_fmt, flags)
 
-    cmd = build_pandoc_cmd(per_leading, input_file, mo, file_arg, output_file, post_file_args)
+    cmd = build_pandoc_cmd(per_leading, input_file, mo, file_arg, output_file, clean_post_args)
 
     commands << cmd
   end
 
   commands
+end
+
+# Helper method for backward compatibility with tests
+# Accepts either (input_file, argv) or just (argv) and returns first command
+def build_pandoc_args(*args)
+  argv = if args.length == 2
+           # called with (input_file, argv) - use argv
+           args[1]
+         elsif args.length == 1
+           # called with just argv
+           args[0]
+         else
+           raise ArgumentError, "Expected 1 or 2 arguments, got #{args.length}"
+         end
+
+  commands = build_pandoc_invocations(argv)
+  commands.first || []
 end
 
 if __FILE__ == $PROGRAM_NAME

@@ -8,6 +8,11 @@ def get_pandoc_opts
   ['from']
 end
 
+# stub supported formats for tests
+def get_supported_formats
+  %w[html epub pdf docx latex markdown]
+end
+
 class TestFromHandling < Minitest::Test
   def test_top_level_from_applied
     meta = { 'html' => {} }
