@@ -41,7 +41,7 @@ More of my text.
 Will execute:
 
 ```sh
-pandoc test.md --standalone --output test.html --include-in-header foo.css --include-in-header bar.js --from gfm
+pandoc test.md --standalone --output test.html --include-in-header foo.css --include-in-header bar.js --from gfm -to html
 ```
 
 Note how panrun defaults to using the first key in the YAML, in this case `html`.
@@ -100,6 +100,43 @@ output:
 
 The `from` value is passed through to pandoc as `--from <value>`.
 
+## Multiple outputs, auto-filename and CLI flags
+
+You can convert a document to multiple formats in one invocation using multiple `-t` flags, or by using a YAML `outputs:` list in your document:
+
+```sh
+panrun -t html -t epub input.md
+```
+
+or in YAML:
+
+```yaml
+---
+outputs:
+  - html
+  - epub
+output:
+  html:
+    standalone: true
+  epub:
+    standalone: true
+auto-filename: true
+---
+```
+
+When `auto-filename: true` is set, panrun will generate output filenames from the document `title` (or the first top-level `# Heading` if `title` is not present). Use `auto-filename: date` (or `auto-filename-date: true`) to append the current date in ISO format to the generated filename, e.g. `my-title_2026-01-16.epub`.
+
+CLI flags added:
+
+- `--force` / `-f` — overwrite existing output files
+- `--dry-run` — show planned commands without running them
+- `--verbose` / `-v` — show pandoc output and commands
+- `--quiet` — suppress informational messages
+- `--log <file>` — append panrun invocation messages to a log file
+- `--help` / `-h` — show help
+
+panrun validates requested formats against your installed pandoc (it strips `+`/`-` extensions before checking). If pandoc is missing, panrun will show installation hints for your platform (Homebrew, apt, dnf, pacman, apk, choco/winget).
+
 
 ## Design
 
@@ -110,13 +147,11 @@ The `from` value is passed through to pandoc as `--from <value>`.
 - If you're looking for more than a simple wrapper script, have a look at [panzer](https://github.com/msprev/panzer) or [pandocomatic](https://github.com/htdebeer/pandocomatic).
 - If you're wondering whether this functionality will soon be part of pandoc itself, the answer is [probably not](https://github.com/jgm/pandoc/issues/4627#issuecomment-422108494).
 - Look at the source, it's really quite minimal! (In the end, I couldn't resist adding another ~40 lines of code for the defaults functionality...)
-- Possible TODOs:
-  - [ ] Look for non-format specific options directly in the `output` mapping?
 
 
 ## Installation
 
-1. [Download panrun](https://raw.githubusercontent.com/mb21/panrun/master/panrun)
+1. [Download panrun](https://raw.githubusercontent.com/rapjul/panrun/master/panrun)
 2. Place the file somewhere on your `PATH` (e.g. in `/usr/local/bin/`)
 3. Make sure the file has no extension and make it executable. On macOS/Linux (for Windows [read this](https://stackoverflow.com/questions/1422380/)):
 

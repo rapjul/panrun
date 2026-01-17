@@ -1,4 +1,8 @@
 #!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'English'
+
 require 'yaml'
 
 # guess output_format from argv
@@ -6,28 +10,26 @@ def get_output_format(argv = ARGV)
   output_file = nil
   (argv || []).each_with_index do |a, i|
     next if a.nil?
-    if a == "-o" || a == "--output"
-      output_file = argv[i+1]
-    elsif a.start_with?("--output=")
-      output_file = a[9..-1]
+
+    if ['-o', '--output'].include?(a)
+      output_file = argv[i + 1]
+    elsif a.start_with?('--output=')
+      output_file = a[9..]
     end
   end
   output_format = nil
   (argv || []).each_with_index do |a, i|
     next if a.nil?
-    if a == "-t" || a == "--to"
-      output_format = argv[i+1]
-    elsif a.start_with?("--to=")
-      output_format = a[5..-1]
+
+    if ['-t', '--to'].include?(a)
+      output_format = argv[i + 1]
+    elsif a.start_with?('--to=')
+      output_format = a[5..]
     end
   end
-  if output_format.nil?
-    if !output_file.nil? && output_file.include?(".")
-      output_format = output_file.split(".").last
-      if ["pdf", "tex"].include? output_format
-        output_format = "latex"
-      end
-    end
+  if output_format.nil? && !output_file.nil? && output_file.include?('.')
+    output_format = output_file.split('.').last
+    output_format = 'latex' if %w[pdf tex].include? output_format
   end
   output_format
 end
@@ -43,12 +45,13 @@ def parse_argv_for_input(argv)
   while i < argv.length
     a = argv[i]
     break if a.nil?
+
     # explicit end-of-options
-    if a == "--"
+    if a == '--'
       i += 1
       if i < argv.length
         input_file = argv[i]
-        post = argv[(i+1)..-1] || []
+        post = argv[(i + 1)..] || []
       end
       break
     end
@@ -60,26 +63,23 @@ def parse_argv_for_input(argv)
       next
     end
 
-    if a.start_with?("-")
+    if a.start_with?('-')
       # options that take a separate value
-      if ["-t","--to","-o","--output"].include?(a)
-        leading << a
-        if i+1 < argv.length
-          leading << argv[i+1]
-        end
+      leading << a
+      if ['-t', '--to', '-o', '--output', '--log'].include?(a)
+        # include option and its value if present
+        leading << argv[i + 1] if i + 1 < argv.length
         i += 2
-      elsif a.include?("=")
-        leading << a
+      elsif a.include?('=')
         i += 1
       else
         # flag without value
-        leading << a
         i += 1
       end
     else
       input_file = a
       i += 1
-      post = argv[i..-1] || []
+      post = argv[i..] || []
       break
     end
   end
@@ -87,20 +87,117 @@ def parse_argv_for_input(argv)
   [leading, input_file, post]
 end
 
-def get_pandoc_opts()
-  opts = %x(pandoc --bash-completion).scan(/opts\=\"([^"]*)/).first.first
+# Normalize a format specification by stripping + and - extensions
+# e.g. "markdown+hard_line_breaks-foo" -> "markdown"
+def normalize_format(spec)
+  return nil if spec.nil?
+
+  spec.to_s.split(/[+-]/).first
+end
+
+# Return list of pandoc supported formats, preferring --list-output-formats
+# Falls back to parsing --bash-completion; returns [] if pandoc missing
+# prefer a simple, idiomatic reader name, but keep old name for compatibility
+def get_supported_formats
+  supported_formats
+end
+
+def supported_formats
+  out = `pandoc --list-output-formats 2>/dev/null`
+  return out.split("\n").map(&:strip) if $CHILD_STATUS.success? && out && !out.strip.empty?
+
+  # fallback to parse bash completion
+  out = `pandoc --bash-completion 2>/dev/null`
+  if $CHILD_STATUS.success? && out && !out.strip.empty?
+    # crude token extraction; tests will stub this
+    return out.scan(/\b[a-z0-9_+-]+\b/i).map(&:downcase).uniq
+  end
+
+  []
+end
+
+# collect all CLI -t/--to targets (allow multiple)
+def get_cli_targets(argv)
+  cli_targets(argv)
+end
+
+def cli_targets(argv)
+  t = []
+  (argv || []).each_with_index do |a, i|
+    if %w[-t --to].include?(a)
+      t << argv[i + 1] if argv[i + 1]
+    elsif a.start_with?('--to=')
+      t << a[5..]
+    end
+  end
+  t
+end
+
+# parse common CLI flags
+def parse_cli_flags(argv)
+  flags = {
+    force: false,
+    dry_run: false,
+    verbose: false,
+    quiet: false,
+    log: nil
+  }
+  (argv || []).each_with_index do |a, i|
+    case a
+    when '--force', '-f'
+      flags[:force] = true
+    when '--dry-run'
+      flags[:dry_run] = true
+    when '--verbose', '-v'
+      flags[:verbose] = true
+    when '--quiet'
+      flags[:quiet] = true
+    when '--log'
+      flags[:log] = argv[i + 1]
+    when /^--log=(.*)/
+      flags[:log] = Regexp.last_match(1)
+    end
+  end
+  flags
+end
+
+# Ensure pandoc is available and has at least one supported format.
+# Raises RuntimeError with platform-specific install hints if missing
+def check_pandoc_available!
+  formats = get_supported_formats
+  if formats.empty?
+    hint = <<~HINT.chomp
+      pandoc not found or returned no formats. Install pandoc:
+      macOS: `brew install pandoc`
+      Debian/Ubuntu: `sudo apt install pandoc`
+      Fedora: `sudo dnf install pandoc`
+      Arch: `sudo pacman -S pandoc`
+      Alpine: `apk add pandoc`
+      Windows: `choco install pandoc` or `winget install pandoc`
+    HINT
+    raise "panrun: cannot find pandoc or supported output formats. #{hint}"
+  end
+  formats
+end
+
+def get_pandoc_opts
+  pandoc_opts
+end
+# rubocop:enable Naming/AccessorMethodName
+
+def pandoc_opts
+  out = `pandoc --bash-completion 2>/dev/null`
+  return [] unless $CHILD_STATUS.success? && out
 
   # strip the two preceding dashes and ignore one-letter variants
-  opts.split(' ').map do |o|
-    if o[0..1] == "--"
-      o[2..-1]
-    end
+  out.scan(/opts="([^"]*)/).flatten.first.to_s.split(' ').map do |o|
+    o[2..] if o[0..1] == '--'
   end
 end
 
 # convert a meta-hash to an arguments-array
 def get_args(meta)
-  pandoc_opts = get_pandoc_opts()
+  pandoc_opts = get_pandoc_opts
   args = []
   meta.each do |key, val|
     # check whether `key` is an option that can be
@@ -111,25 +208,23 @@ def get_args(meta)
       # since RMarkdown YAML uses e.g. `toc_depth` instead of `toc-depth`
       # try that as well:
       key = key.gsub('_', '-')
-      if pandoc_opts.include? key
-        opt = key
-      end
+      opt = key if pandoc_opts.include? key
     end
 
     if opt && val != false
       if val.is_a? Hash
         val.each do |k, v|
-          args.push "--" ++ opt
-          args.push k ++ "=" ++ v
+          args.push "--#{opt}"
+          args.push "#{k}=#{v}"
         end
       elsif val.is_a? Array
         val.each do |v|
-          args.push "--" ++ opt
+          args.push "--#{opt}"
           args.push v
         end
       else
-        args.push "--" ++ opt
-        if not (val.nil? || val.is_a?(TrueClass))
+        args.push "--#{opt}"
+        unless val.nil? || val.is_a?(TrueClass)
           # try to only include a value for an option that takes one
           args.push val.to_s
         end
@@ -137,151 +232,303 @@ def get_args(meta)
     end
   end
 
-  if more_args = meta['pandoc_args']
+  if (more_args = meta['pandoc_args'])
     args.concat more_args
   end
-  return args
+  args
 end
 
-def output_key_name()
-  "output"
+# validate meta options against supported pandoc options; returns array of unknown keys
+# does not treat `pandoc_args` as unknown
+def validate_meta_options(meta_out)
+  pandoc_opts = get_pandoc_opts || []
+  unknown = []
+  meta_out.each_key do |k|
+    next if %w[pandoc_args output from to output].include?(k)
+
+    key = k.to_s
+    cand = key
+    cand = cand.gsub('_', '-')
+    unknown << k unless pandoc_opts.include?(cand)
+  end
+  unknown
 end
 
-def data_dir_name()
+def data_dir_name
   if ENV['APPDATA']
     # Windows
-    File.join ENV['APPDATA'], "panrun"
+    File.join ENV['APPDATA'], 'panrun'
   else
     # POSIX
-    File.join Dir.home, ".panrun"
+    File.join Dir.home, '.panrun'
   end
 end
 
 def load_yaml(file_name)
-  begin
-    # try ruby v3 arguments
-    YAML.load_file(file_name, permitted_classes:["Date"])
-  rescue ArgumentError
-    # fallback to ruby v2 arguments
-    YAML.load_file(file_name)
-  end
+  # try ruby v3 arguments
+  YAML.load_file(file_name, permitted_classes: ['Date'])
+rescue ArgumentError
+  # fallback to ruby v2 arguments
+  YAML.load_file(file_name)
 end
 
 # try to load default YAML from other files and merge it with local YAML
-def get_meta_from_other_file(meta, type=nil)
-  if not type.is_a?(String)
-    type = "default"
-  end
-  data_dir = data_dir_name()
-  file_name = if [".", "..", "/", "\\"].include? type[0]
+def get_meta_from_other_file(meta, type = nil)
+  type = 'default' unless type.is_a?(String)
+  data_dir = data_dir_name
+  file_name = if ['.', '..', '/', '\\'].include? type[0]
                 if File.file? type
                   type
                 else
-                 abort "Could not find file #{type}"
+                  abort "Could not find file #{type}"
                 end
               else
                 # look in ~/.panrun/
-                name = File.join(data_dir, type + ".yaml")
-                if File.file? name
-                  name
-                else
-                  nil
-                end
+                name = File.join(data_dir, "#{type}.yaml")
+                name if File.file? name
               end
-  file_meta, args, file_top = if file_name && m = load_yaml(file_name)
-                                  [ m[output_key_name] || {}, ["--metadata-file", file_name], (m.reject { |k,_| k == output_key_name }) ]
-                                else
-                                  [{}, [], {}]
-                                end
-  file_meta.each do |format, _|
-    meta[format] = file_meta[format].merge( meta[format] || {} )
+  file_meta, args, file_top = if file_name && (m = load_yaml(file_name))
+                                [m['output'] || {}, ['--metadata-file', file_name], m.reject do |k, _|
+                                  k == 'output'
+                                end]
+                              else
+                                [{}, [], {}]
+                              end
+  file_meta.each_key do |format|
+    meta[format] = file_meta[format].merge(meta[format] || {})
   end
-  return [meta, args, file_top]
+  [meta, args, file_top]
 end
-
 
 def apply_global_from(meta, top_from)
   return meta unless top_from
+
   meta.each do |format, val|
     val = {} unless val.is_a?(Hash)
-    unless val.key?("from")
-      val["from"] = top_from
-    end
+    val['from'] = top_from unless val.key?('from')
     meta[format] = val
   end
   meta
 end
 
+# Resolve a target (either a YAML key or a pandoc format)
+def resolve_target_format(target, meta, supported_formats)
+  # if target corresponds to a YAML output key
+  if meta && meta[target]
+    mo = meta[target]
+    pandoc_fmt = mo['to'] || mo['output']
+    if pandoc_fmt.nil? || pandoc_fmt.to_s.empty?
+      # check whether the key itself is a pandoc format (stripping +/-, etc.)
+      base = normalize_format(target)
+      unless supported_formats.include?(base) || supported_formats.include?(target)
+        raise "panrun: target '#{target}' is not a known pandoc format and no `to` field is present in YAML output '#{target}'."
+      end
 
-def build_pandoc_args(*args)
-  # two calling conventions:
-  #  - build_pandoc_args(argv_array)
-  #  - build_pandoc_args(input_file, argv_array)
-  if args.length == 1 && args[0].is_a?(Array)
-    argv_array = args[0]
-    leading_opts, input_file, post_file_args = parse_argv_for_input(argv_array)
-  elsif args.length >= 2
-    input_file = args[0]
-    argv_array = args[1].is_a?(Array) ? args[1] : ARGV
-    # find input_file index in argv_array
-    idx = argv_array.index(input_file)
-    if idx
-      leading_opts = argv_array[0...idx]
-      post_file_args = argv_array[(idx+1)..-1] || []
-    else
-      # fallback: no index found, try parsing normally
-      leading_opts, input_file, post_file_args = parse_argv_for_input(argv_array)
+      pandoc_fmt = target
+
     end
-  else
-    raise ArgumentError, "Invalid arguments for build_pandoc_args"
+    return [pandoc_fmt, mo]
   end
 
-  yaml = load_yaml(input_file) || {}
-  doc_meta = yaml[output_key_name] || {}
-  meta, file_arg, file_top = get_meta_from_other_file doc_meta, yaml["type"]
-  # apply top-level `from` precedence
-  top_from = yaml["from"] || (file_top && file_top["from"])
-  apply_global_from(meta, top_from) if top_from
+  # otherwise treat as pandoc format (normalize first)
+  base = normalize_format(target)
+  return [target, {}] if supported_formats.include?(base) || supported_formats.include?(target)
 
-  # determine output format from provided argv_array
-  output_format = get_output_format(argv_array)
-  if output_format.nil?
-    if meta.is_a?(Hash) && meta.first
-      output_format = meta.first[0]
-    else
-      raise "Could not find any output format in YAML."
-    end
-  end
-
-  # lookup format in meta, else try various rmarkdown formats
-  meta_out = if meta[output_format]
-               meta[output_format]
-             elsif meta[output_format + "_document"]
-               meta[output_format + "_document"]
-             elsif output_format == "latex" && meta["pdf_document"]
-               meta["pdf_document"]
-             elsif meta[output_format + "_presentation"]
-               meta[output_format + "_presentation"]
-             else
-               raise "Could not find YAML key for detected output format '#{output_format}'."
-             end
-
-  meta_args = get_args(meta_out)
-  final_args = ["pandoc"] + (leading_opts || []) + [input_file] + meta_args + (file_arg || []) + (post_file_args || [])
-  final_args
+  raise "panrun: unknown target '#{target}' and not found in YAML `output` mapping."
 end
 
-if __FILE__ == $0
-  leading_opts, input_file, post_file_args = parse_argv_for_input(ARGV)
-  if input_file.nil? || input_file[0] == "-"
-    abort "Usage: panrun input.md [pandoc-options]\n\n"\
-          "Looking for default.yaml etc. in #{data_dir_name}\n"\
-          "For more info, see https://github.com/mb21/panrun"
+# map pandoc format to reasonable file extension
+def ext_for_format(fmt)
+  case fmt.to_s.downcase
+  when 'html', 'html5'
+    'html'
+  when 'epub', 'epub3'
+    'epub'
+  when 'docx'
+    'docx'
+  when 'markdown', 'md'
+    'md'
+  when 'latex', 'tex'
+    'tex'
+  when 'pdf'
+    'pdf'
+  else
+    fmt.to_s
+  end
+end
+
+# slugify a title to a safe filename (simple ASCII fallback)
+def slugify(title)
+  return nil if title.nil?
+
+  s = title.strip.downcase
+  # replace non-alphanum with dashes
+  s = s.gsub(/[^a-z0-9]+/, '-').gsub(/^-|-$/, '')
+  s.empty? ? nil : s
+end
+
+# generate an output filename based on YAML, title, heading, and options
+def generate_output_filename(input_file, yaml, meta_out, pandoc_fmt, add_date = false, **kwargs)
+  # support both legacy positional boolean and keyword usage (add_date: true)
+  add_date = kwargs[:add_date] if kwargs.key?(:add_date)
+
+  # if user provided explicit output in meta_out, use it
+  return meta_out['output'] if meta_out && meta_out['output'] && !meta_out['output'].to_s.empty?
+
+  # look for title or first heading
+  title = yaml['title']
+  if (!title || title.to_s.strip.empty?) && File.file?(input_file)
+    File.foreach(input_file) do |line|
+      if line.start_with?('# ')
+        title = line.sub(/^#\s*/, '').strip
+        break
+      end
+    end
   end
 
-  args = build_pandoc_args(ARGV)
+  slug = slugify(title) || File.basename(input_file, '.*')
+  ext = ext_for_format(pandoc_fmt)
+  slug + (add_date ? "_#{Time.now.strftime('%F')}" : '') + ".#{ext}"
+end
 
-  STDERR.puts "panrun calling: " + args.join(' ')
+def remove_to_options!(arr)
+  i = 0
+  while i < arr.length
+    a = arr[i]
+    if %w[-t --to].include?(a)
+      arr.slice!(i, 2)
+    elsif a.start_with?('--to=')
+      arr.slice!(i)
+    else
+      i += 1
+    end
+  end
+  arr
+end
 
-  exec *args
+def prepare_per_leading(leading_opts, pandoc_fmt)
+  arr = (leading_opts || []).dup
+  remove_to_options!(arr)
+  arr + ['-t', pandoc_fmt]
+end
+
+def determine_output_file(input_file, yaml, mo, pandoc_fmt, flags)
+  add_date = (mo && (mo['auto-filename'] == 'date' || mo['auto-filename-date'])) || (yaml['auto-filename'] == 'date' || yaml['auto-filename-date'])
+  auto_filename_enabled = (mo && mo['auto-filename']) || yaml['auto-filename']
+
+  out = if mo && mo['output'] && !mo['output'].to_s.empty?
+          mo['output']
+        elsif auto_filename_enabled
+          generate_output_filename(input_file, yaml, mo || {}, pandoc_fmt, add_date: add_date)
+        end
+
+  if out
+    overwrite = (mo && mo['overwrite']) || yaml['overwrite'] || flags[:force]
+    raise "panrun: output file '#{out}' already exists; set overwrite: true in YAML or pass --force to overwrite" if File.exist?(out) && !overwrite
+  end
+
+  out
+end
+
+def build_pandoc_cmd(per_leading, input_file, mo, file_arg, output_file, post_file_args)
+  base = ['pandoc'] + per_leading + [input_file] + (mo ? get_args(mo) : []) + file_arg + (post_file_args || [])
+  return base + ['--output', output_file] if output_file
+
+  base
+end
+
+# Build pandoc invocations for one or more targets
+# Returns array of command arrays, one per target
+def build_pandoc_invocations(argv_array)
+  leading_opts, input_file, post_file_args = parse_argv_for_input(argv_array)
+  flags = parse_cli_flags(argv_array)
+  formats = check_pandoc_available!
+
+  yaml = load_yaml(input_file) || {}
+  doc_meta = yaml['output'] || {}
+  meta, file_arg, file_top = get_meta_from_other_file(doc_meta, yaml['type'])
+  top_from = yaml['from'] || (file_top && file_top['from'])
+  apply_global_from(meta, top_from) if top_from
+
+  # determine targets: CLI -t values, else YAML outputs list, else single default
+  cli_targets = get_cli_targets(argv_array)
+  targets = if cli_targets && !cli_targets.empty?
+              cli_targets
+            elsif yaml['outputs'].is_a?(Array)
+              yaml['outputs']
+            else
+              # fallback to previous single-target behavior
+              ofmt = get_output_format(argv_array)
+              if ofmt
+                [ofmt]
+              elsif meta.is_a?(Hash) && meta.first
+                [meta.first[0]]
+              else
+                raise 'Could not find any output format from CLI or YAML.'
+              end
+            end
+
+  commands = []
+  targets.each do |t|
+    pandoc_fmt, mo = resolve_target_format(t.to_s, meta, formats)
+
+    # validate meta options per-format and warn if unknown
+    unknown = validate_meta_options(mo || {})
+    warn "panrun: [WARNING] unknown pandoc options for '#{t}': #{unknown.join(', ')}" if unknown && !unknown.empty?
+
+    per_leading = prepare_per_leading(leading_opts, pandoc_fmt)
+
+    output_file = determine_output_file(input_file, yaml, mo, pandoc_fmt, flags)
+
+    cmd = build_pandoc_cmd(per_leading, input_file, mo, file_arg, output_file, post_file_args)
+
+    commands << cmd
+  end
+
+  commands
+end
+
+if __FILE__ == $PROGRAM_NAME
+  # show help if requested or no args
+  if ARGV.empty? || ARGV.include?('--help') || ARGV.include?('-h')
+    puts 'Usage: panrun [options] input.md [pandoc-options]'
+    puts 'Options: --force, --dry-run, --verbose, --quiet, --log <file>, --help'
+    exit 0
+  end
+
+  # basic validation: ensure input file is present
+  _, input_file, = parse_argv_for_input(ARGV)
+  if input_file.nil? || input_file[0] == '-'
+    abort "Usage: panrun input.md [pandoc-options]\n\n"\
+          "Looking for default.yaml etc. in #{data_dir_name}\n"\
+          'For more info, see https://github.com/mb21/panrun'
+  end
+
+  flags = parse_cli_flags(ARGV)
+  cmds = build_pandoc_invocations(ARGV)
+
+  if flags[:dry_run]
+    cmds.each do |c|
+      puts "panrun (dry-run) would call: #{c.join(' ')}"
+    end
+    exit 0
+  end
+
+  # execute sequentially
+  cmds.each do |c|
+    warn "panrun calling: #{c.join(' ')}" unless flags[:quiet]
+    if flags[:verbose]
+      system(*c)
+    elsif flags[:log]
+      # suppress output unless verbose; still capture exit status
+      File.open(flags[:log], 'a') do |f|
+        f.puts "panrun calling: #{c.join(' ')}"
+      end
+      system(*c)
+    else
+      system(*c, out: File::NULL, err: File::NULL)
+    end
+    exit $CHILD_STATUS.exitstatus unless $CHILD_STATUS.success?
+  end
+  exit 0
 end
