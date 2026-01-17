@@ -1,14 +1,16 @@
+# frozen_string_literal: true
+
 require 'minitest/autorun'
 load File.expand_path('../panrun', __dir__) # use load to import script without .rb extension
 
 # ensure get_args recognizes --from in tests
-def get_pandoc_opts()
+def get_pandoc_opts
   ['from']
 end
 
 class TestFromHandling < Minitest::Test
   def test_top_level_from_applied
-    meta = {'html' => {}}
+    meta = { 'html' => {} }
     apply_global_from(meta, 'markdown+hard_line_breaks')
     assert_equal 'markdown+hard_line_breaks', meta['html']['from']
     args = get_args(meta['html'])
@@ -17,7 +19,7 @@ class TestFromHandling < Minitest::Test
   end
 
   def test_per_output_overrides_top_level
-    meta = {'html' => {'from' => 'markdown_github'}}
+    meta = { 'html' => { 'from' => 'markdown_github' } }
     apply_global_from(meta, 'markdown+smart')
     assert_equal 'markdown_github', meta['html']['from']
     args = get_args(meta['html'])
@@ -26,7 +28,7 @@ class TestFromHandling < Minitest::Test
   end
 
   def test_default_file_from_applied
-    meta = {'html' => {}}
+    meta = { 'html' => {} }
     apply_global_from(meta, 'markdown+line_breaks')
     assert_equal 'markdown+line_breaks', meta['html']['from']
   end
@@ -37,11 +39,11 @@ class TestFromHandling < Minitest::Test
     tf.write("---\nfrom: markdown+tmp\noutput:\n  html:\n    standalone: true\n")
     tf.close
 
-    m, args, file_top = get_meta_from_other_file({}, tf.path)
+    m, _, file_top = get_meta_from_other_file({}, tf.path)
     assert_equal 'markdown+tmp', file_top['from']
     assert m['html']['standalone'] == true
   ensure
-    tf.unlink if tf
+    tf&.unlink
   end
 
   def test_build_pandoc_args_full_flow
@@ -55,7 +57,7 @@ class TestFromHandling < Minitest::Test
     assert_includes args, '--from'
     assert_includes args, 'markdown+special'
   ensure
-    tf.unlink if tf
+    tf&.unlink
   end
 
   def test_option_before_file_places_before_filename
@@ -69,7 +71,7 @@ class TestFromHandling < Minitest::Test
     assert_includes args, '-t'
     assert args.index('-t') < args.index(tf.path)
   ensure
-    tf.unlink if tf
+    tf&.unlink
   end
 
   def test_option_after_file_stays_after_filename
@@ -83,7 +85,7 @@ class TestFromHandling < Minitest::Test
     assert_includes args, '-t'
     assert args.index('-t') > args.index(tf.path)
   ensure
-    tf.unlink if tf
+    tf&.unlink
   end
 
   def test_build_pandoc_args_per_output_override
@@ -95,7 +97,7 @@ class TestFromHandling < Minitest::Test
     args = build_pandoc_args(tf.path, [tf.path, '-t', 'html'])
     assert_includes args, 'markdown+override'
   ensure
-    tf.unlink if tf
+    tf&.unlink
   end
 
   def test_build_pandoc_args_uses_default_file_from
@@ -111,7 +113,7 @@ class TestFromHandling < Minitest::Test
     args = build_pandoc_args(tf.path, [tf.path, '-t', 'html'])
     assert_includes args, 'markdown+default'
   ensure
-    tf.unlink if tf
-    tf_default.unlink if tf_default
+    tf&.unlink
+    tf_default&.unlink
   end
 end
