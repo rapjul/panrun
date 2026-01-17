@@ -411,9 +411,13 @@ def replace_to_options(arr, new_format)
   while i < arr.length
     a = arr[i]
     if %w[-t --to].include?(a)
-      # replace the value after -t/--to
-      arr[i + 1] = new_format if i + 1 < arr.length
-      i += 2
+      # replace the value after -t/--to if it exists
+      if i + 1 < arr.length
+        arr[i + 1] = new_format
+        i += 2
+      else
+        i += 1
+      end
     elsif a.start_with?('--to=')
       arr[i] = "--to=#{new_format}"
       i += 1
@@ -522,9 +526,10 @@ end
 
 # Helper method for backward compatibility with tests
 # Accepts either (input_file, argv) or just (argv) and returns first command
+# Note: when called with 2 args, input_file is ignored (argv must contain the file)
 def build_pandoc_args(*args)
   argv = if args.length == 2
-           # called with (input_file, argv) - use argv
+           # called with (input_file, argv) - ignore input_file, use argv
            args[1]
          elsif args.length == 1
            # called with just argv
